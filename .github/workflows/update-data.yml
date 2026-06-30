@@ -1,0 +1,40 @@
+name: Update data daily
+
+# อัปเดตข้อมูลอัตโนมัติทุกวัน แล้ว commit ฐานข้อมูลกลับเข้า repo
+# -> Streamlit Cloud จะ redeploy ให้เองเมื่อมี commit ใหม่
+on:
+  schedule:
+    - cron: "0 9 * * *"       # ทุกวัน 09:00 UTC (~16:00 น. ไทย)
+  workflow_dispatch:           # กดรันเองได้จากแท็บ Actions
+
+permissions:
+  contents: write              # ให้สิทธิ์ commit/push กลับ repo
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: ติดตั้ง dependencies
+        run: pip install -r requirements.txt
+
+      - name: ดึงข้อมูลล่าสุด + เติม ticker
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          OPENFIGI_API_KEY: ${{ secrets.OPENFIGI_API_KEY }}
+        run: |
+          python update_data.py
+          python backfill_tickers.py
+
+      - name: Commit ข้อมูลที่อัปเดต
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/portfolios.db data/*.json
+          git commit -m "chore: อัปเดตข้อมูลอัตโนมัติ ($(date -u +%Y-%m-%d))" || echo "ไม่มีข้อมูลใหม่"
+          git push

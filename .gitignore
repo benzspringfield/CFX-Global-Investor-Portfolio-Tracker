@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Streamlit secrets (ห้าม commit ค่าลับ/รหัสผ่าน!)
+.streamlit/secrets.toml
+
+# ไฟล์ชั่วคราว/ล็อก
+data/_*.log
+*.log
+scratchpad/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# หมายเหตุ: data/portfolios.db และ data/*.json (cache) ตั้งใจ commit
+#          เพื่อให้ Streamlit Cloud มีข้อมูลพร้อมใช้ทันที
