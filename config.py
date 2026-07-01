@@ -42,6 +42,9 @@ OPENFIGI_API_KEY = _secret("OPENFIGI_API_KEY", "")
 # รหัสผ่านเข้าแอป (ตั้งใน st.secrets บน Streamlit Cloud) — เว้นว่าง = ไม่ล็อก (รันในเครื่อง)
 APP_PASSWORD = _secret("APP_PASSWORD", "")
 
+# Anthropic API key สำหรับปุ่ม "วิเคราะห์เชิงลึกด้วย AI" — เว้นว่าง = ซ่อนปุ่ม (ใช้แต่สูตรฟรี)
+ANTHROPIC_API_KEY = _secret("ANTHROPIC_API_KEY", "")
+
 # ---------------------------------------------------------------------------
 # ทะเบียนนักลงทุน
 # source:

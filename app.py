@@ -13,6 +13,7 @@ from analysis.consensus import build_consensus, overlap_matrix
 from analysis.model import build_model, suggest_portfolio
 from analysis.backtest import run_backtest, compare_portfolios
 from analysis.adaptive import run_adaptive, compare_adaptive
+from analysis.insights import quant_metrics, qualitative_narrative, ai_analysis
 
 st.set_page_config(page_title="Portfolios Tracker", layout="wide", page_icon="📊")
 
@@ -89,6 +90,56 @@ def is_archived(inv):
     return age is not None and age > ARCHIVE_AGE_DAYS
 
 
+from pathlib import Path as _Path
+_ASSET_DIR = _Path(__file__).resolve().parent / "assets"
+
+
+@st.cache_data(show_spinner=False)
+def _xavier_img():
+    try:
+        from PIL import Image
+        p = _ASSET_DIR / "xavier.webp"
+        return Image.open(p) if p.exists() else None
+    except Exception:
+        return None
+
+
+def render_infographic(port, total_value, title="BenzSpringfield",
+                       subtitle="Charles Francis Xavier Portfolio"):
+    """การ์ดโดนัทนำเสนอสไตล์ Leverage Shares + รูปตรงกลาง"""
+    import plotly.graph_objects as go
+    labels = port["ticker"].fillna(port["issuer"]).tolist()
+    values = port["alloc_pct"].tolist()
+    fig = go.Figure(go.Pie(
+        labels=labels, values=values, hole=0.63, sort=False, direction="clockwise",
+        textinfo="label+percent", textposition="outside",
+        marker=dict(line=dict(color="white", width=2)),
+        hovertemplate="%{label}: %{value:.1f}%<extra></extra>",
+    ))
+    img = _xavier_img()
+    if img is not None:
+        fig.add_layout_image(dict(source=img, xref="paper", yref="paper",
+            x=0.5, y=0.5, sizex=0.26, sizey=0.40,
+            xanchor="center", yanchor="middle", layer="above"))
+    fig.update_layout(
+        showlegend=False, height=660,
+        title=dict(
+            text=f"<b>{title}</b><br><span style='font-size:15px'>{subtitle}</span>",
+            x=0.5, xanchor="center", y=0.97),
+        margin=dict(t=115, b=65, l=90, r=90),
+        annotations=[
+            dict(text=f"<b>Portfolio Value ≈ {fmt_usd(total_value)}</b>", showarrow=False,
+                 x=0.5, y=1.07, xref="paper", yref="paper", font=dict(size=15)),
+            dict(text="Capital at risk.", showarrow=False, x=0.0, y=-0.09,
+                 xref="paper", yref="paper", xanchor="left", font=dict(size=13)),
+            dict(text="Source: SEC 13F · Smart-Money consensus model", showarrow=False,
+                 x=1.0, y=-0.09, xref="paper", yref="paper", xanchor="right",
+                 font=dict(size=11, color="gray")),
+        ],
+    )
+    return fig
+
+
 # ---------------------------------------------------------------- sidebar
 st.sidebar.title("📊 Portfolios Tracker")
 st.sidebar.caption("ถอดรื้อพอร์ตนักลงทุนระดับโลก")
@@ -107,45 +158,80 @@ if page == "🏠 ภาพรวม":
     st.title("ภาพรวมนักลงทุนที่ติดตาม")
     st.caption("ข้อมูลฟรีจาก SEC 13F · arkfunds.io · House Clerk — เป็นเครื่องมือศึกษา ไม่ใช่คำแนะนำลงทุน")
 
-    # แยกกองที่ยัง active (ข้อมูล <=1 ปี) กับที่เก็บเข้าคลัง (>1 ปี เช่นเลิกยื่น 13F)
-    visible = [(k, c) for k, c in INVESTORS.items() if not is_archived(k)]
-    archived = [(k, c) for k, c in INVESTORS.items() if is_archived(k)]
+    # ค้นหา + ปุ่มแสดง/ซ่อน
+    fc1, fc2 = st.columns([3, 2])
+    query = fc1.text_input("🔍 ค้นหาพอร์ต (ชื่อนักลงทุน / สไตล์)", "").strip().lower()
+    show_hidden = fc2.toggle("แสดงกองที่ซ่อนไว้ (ไม่มีข้อมูล / เก่ากว่า 1 ปี)", value=False)
 
-    cols = st.columns(len(visible))
-    for col, (key, cfg) in zip(cols, visible):
+    def _is_hidden(k):
+        return is_archived(k) or not get_periods(k)   # เก่ากว่า 1 ปี หรือ ไม่มี holdings
+
+    def _match(cfg):
+        if not query:
+            return True
+        return query in (cfg["display"] + " " + cfg.get("style", "")).lower()
+
+    def render_card(key, cfg, col):
         with col:
             periods = get_periods(key)
-            st.markdown(f"**{cfg['display'].split('(')[0]}**")
+            tag = " 🗄️" if is_archived(key) else ""
+            st.markdown(f"**{cfg['display'].split('(')[0]}**{tag}")
             st.caption(cfg["style"])
             if periods:
                 df = get_holdings(key, periods[0])
                 st.metric("มูลค่าพอร์ต", fmt_usd(df["value_usd"].sum()),
                           f"{len(df)} ตำแหน่ง")
-                st.caption(f"งวด {periods[0]}")
+                age = _latest_age_days(key)
+                st.caption(f"งวด {periods[0]}" +
+                           (f" · เก่า ~{age/365.25:.1f} ปี" if is_archived(key) else ""))
             elif cfg["source"] == "methodology":
                 st.info(f"ใช้ระบบสัญญาณ\n`{cfg.get('skill')}`")
+            elif cfg["source"] == "congress":
+                st.caption("ดูรายละเอียดในหน้า 🏛️ Congressional")
             else:
                 st.caption("— ยังไม่มีข้อมูล —")
             st.caption(f"📌 {cfg['notes']}")
 
-    # ไอคอนกดดูพอร์ตที่เก็บเข้าคลัง (ซ่อนจากทุกหน้าหลัก ไว้ศึกษาเท่านั้น)
-    if archived:
-        with st.popover(f"🗄️ คลังพอร์ตที่ซ่อนไว้ ({len(archived)})", use_container_width=False):
-            st.markdown("#### 🗄️ พอร์ตที่เก็บเข้าคลัง (ข้อมูลเก่ากว่า 1 ปี — ไว้ศึกษาเท่านั้น)")
-            st.caption("กองเหล่านี้หยุดอัปเดต (เช่นเลิกยื่น 13F/ปิดกอง) จึงซ่อนจากทุกหน้าหลัก "
-                       "และ**ไม่ถูกนำมาคำนวณ Consensus/Model/พอร์ตแนะนำ** — เก็บไว้เพื่อเรียนรู้บทเรียนเท่านั้น")
-            for key, cfg in archived:
-                ps = get_periods(key)
-                age = _latest_age_days(key)
-                st.divider()
-                st.markdown(f"**{cfg['display']}**")
-                st.caption(cfg["style"])
-                if ps:
-                    df = get_holdings(key, ps[0])
-                    yrs = age / 365.25
-                    st.write(f"📅 ข้อมูลล่าสุด **{ps[0]}** (เก่า ~{yrs:.1f} ปี) · "
-                             f"มูลค่าตอนนั้น {fmt_usd(df['value_usd'].sum())} · {len(df)} ตำแหน่ง")
-                st.caption(f"📌 {cfg['notes']}")
+    def render_cards(items, per_row=4):
+        for i in range(0, len(items), per_row):
+            row = items[i:i + per_row]
+            cols = st.columns(len(row))
+            for col, (k, c) in zip(cols, row):
+                render_card(k, c, col)
+
+    active = [(k, c) for k, c in INVESTORS.items() if not _is_hidden(k)]
+    hidden = [(k, c) for k, c in INVESTORS.items() if _is_hidden(k)]
+
+    if query:
+        # โหมดค้นหา — ค้นทั้งหมด (รวมกองที่ซ่อน) ให้เจอสิ่งที่สนใจ
+        matches = [(k, c) for k, c in INVESTORS.items() if _match(c)]
+        st.caption(f"ผลค้นหา “{query}”: {len(matches)} พอร์ต")
+        if matches:
+            render_cards(matches)
+        else:
+            st.info("ไม่พบพอร์ตที่ค้นหา — ลองคำอื่น หรือเคลียร์ช่องค้นหา")
+    else:
+        render_cards(active)
+        if hidden:
+            if show_hidden:
+                st.markdown("##### 🗄️ กองที่ซ่อนไว้ (ไม่มีข้อมูล / เก่ากว่า 1 ปี — ไว้ศึกษา)")
+                st.caption("ไม่ถูกนำมาคำนวณ Consensus/Model/พอร์ตแนะนำ")
+                render_cards(hidden)
+            else:
+                with st.popover(f"🗄️ คลังพอร์ตที่ซ่อนไว้ ({len(hidden)})"):
+                    st.caption("กดปุ่ม 'แสดงกองที่ซ่อนไว้' ด้านบนเพื่อกางเป็นการ์ด "
+                               "หรือดูสรุปสั้นๆ ที่นี่ · ไม่ถูกนำมาคำนวณโมเดล/พอร์ตแนะนำ")
+                    for key, cfg in hidden:
+                        ps = get_periods(key)
+                        st.divider()
+                        st.markdown(f"**{cfg['display']}**")
+                        st.caption(cfg["style"])
+                        if ps:
+                            age = _latest_age_days(key)
+                            st.write(f"📅 ข้อมูลล่าสุด **{ps[0]}** (เก่า ~{age/365.25:.1f} ปี)")
+                        else:
+                            st.write(f"แหล่ง: {cfg['source']} (ไม่มี holdings)")
+                        st.caption(f"📌 {cfg['notes']}")
 
     st.divider()
     st.subheader("ความเสี่ยง/ข้อจำกัดของข้อมูล")
@@ -226,6 +312,38 @@ elif page == "🔁 การเปลี่ยนแปลง":
             st.dataframe(disp, use_container_width=True, height=500)
             st.caption(f"เทียบ {ch['period_old'].iloc[0]} → {ch['period_new'].iloc[0]}")
 
+            # ---- บทวิเคราะห์ไอเดียเจ้าของพอร์ต (Hybrid) ----
+            st.divider()
+            st.subheader("🧠 บทวิเคราะห์ไอเดียเจ้าของพอร์ต")
+            m = quant_metrics(ch)
+            if m:
+                q1, q2, q3, q4 = st.columns(4)
+                q1.metric("ท่าทีสุทธิ", m["net_stance"])
+                q2.metric("เปิดใหม่ / ขายออก", f"{m['new']} / {m['exit']}")
+                q3.metric("Turnover", f"{m['turnover_pct']:.0f}%")
+                q4.metric("กระจุก Top10",
+                          f"{m['concentration_top10_pct']:.0f}%" if m.get("concentration_top10_pct") else "-")
+
+                tab_q, tab_ai = st.tabs(["📋 เชิงคุณภาพ (สูตรฟรี)", "🤖 วิเคราะห์เชิงลึกด้วย AI"])
+                with tab_q:
+                    st.markdown(qualitative_narrative(key, m, INVESTORS[key]["display"]))
+                with tab_ai:
+                    from config import ANTHROPIC_API_KEY
+                    if not ANTHROPIC_API_KEY:
+                        st.info("ยังไม่ได้ตั้ง `ANTHROPIC_API_KEY` ใน Secrets → ปุ่ม AI จะใช้ได้เมื่อใส่ key "
+                                "(มีค่าใช้จ่ายต่อครั้งที่กด) · ตอนนี้ใช้บทวิเคราะห์สูตรฟรีในแท็บซ้ายได้เลย")
+                    else:
+                        st.caption("วิเคราะห์เชิงลึกด้วย Claude — มีค่าใช้จ่ายต่อครั้ง")
+                        if st.button("🤖 วิเคราะห์เชิงลึกด้วย Claude", key="ai_btn"):
+                            with st.spinner("Claude กำลังวิเคราะห์..."):
+                                txt, err = ai_analysis(key, INVESTORS[key]["display"], m, ch,
+                                                       ANTHROPIC_API_KEY)
+                            if err:
+                                st.error(err)
+                            else:
+                                st.markdown(txt)
+                                st.caption("⚠️ สร้างโดย AI — เป็นการตีความ ไม่ใช่คำแนะนำลงทุน")
+
 
 # ---------------------------------------------------------------- Consensus
 elif page == "🤝 Consensus":
@@ -305,6 +423,11 @@ elif page == "🧠 Model & พอร์ตแนะนำ":
         st.subheader("📦 พอร์ตแนะนำ (ถ่วงน้ำหนักตามคะแนน)")
         n_port = st.slider("จำนวนหุ้นในพอร์ต", 5, 20, 10)
         port = suggest_portfolio(model, n=n_port)
+
+        # การ์ดนำเสนอสไตล์ infographic
+        port_value = float(model.head(n_port)["total_value"].sum())
+        st.plotly_chart(render_infographic(port, port_value), use_container_width=True)
+
         cc1, cc2 = st.columns([2, 1])
         with cc1:
             pshow = port.copy()
