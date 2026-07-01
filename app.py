@@ -14,7 +14,8 @@ from analysis.consensus import build_consensus, overlap_matrix
 from analysis.model import build_model, suggest_portfolio
 from analysis.backtest import run_backtest, compare_portfolios
 from analysis.adaptive import run_adaptive, compare_adaptive
-from analysis.insights import quant_metrics, qualitative_narrative, ai_analysis
+from analysis.insights import (quant_metrics, qualitative_narrative, ai_analysis,
+                               actionable_insights)
 from trackers.edgar_13f import search_13f_managers
 
 st.set_page_config(page_title="Portfolios Tracker", layout="wide", page_icon="📊")
@@ -60,6 +61,14 @@ def cached_compare_portfolios(top_n, cost_bps):
 @st.cache_data(ttl=21600, show_spinner=False)
 def cached_compare_adaptive(top_n, lookback, regime_scale):
     return compare_adaptive(top_n=top_n, lookback=lookback, regime_scale=regime_scale)
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def cached_actionable(investor, period_new):
+    # period_new ใช้เป็นคีย์ cache ให้รีเฟรชเมื่อข้อมูลอัปเดต
+    ch = compute_changes(investor)
+    m = quant_metrics(ch)
+    return actionable_insights(investor, ch, m, INVESTORS[investor]["display"])
 
 
 def fmt_usd(v):
@@ -364,13 +373,31 @@ elif page == "🔁 การเปลี่ยนแปลง":
                 q4.metric("กระจุก Top10",
                           f"{m['concentration_top10_pct']:.0f}%" if m.get("concentration_top10_pct") else "-")
 
-                # ฟีเจอร์ AI (เสียเงิน) ถูกปิด/ซ่อนไว้ — จะโผล่อัตโนมัติเมื่อตั้ง ANTHROPIC_API_KEY ใน Secrets
+                # ---- 🎯 สรุป Actionable (ตัดสินใจได้จริง) ----
+                with st.spinner("กำลังประเมินสัญญาณ + ราคาปัจจุบัน..."):
+                    act = cached_actionable(key, m.get("period_new"))
+                if act:
+                    st.markdown("#### 🎯 สรุป Actionable")
+                    for b in act["bullets"]:
+                        st.markdown(b)
+                    if not act["watch"].empty:
+                        st.markdown("**🎯 หุ้นน่าจับตา** (จัดอันดับตาม signal: ขนาด + ถือซ้ำ + เปิดใหม่)")
+                        w = act["watch"].copy()
+                        w["มูลค่า"] = w["มูลค่า"].map(fmt_usd)
+                        if "ราคาตั้งแต่ยื่น_%" in w:
+                            w["ราคาตั้งแต่ยื่น_%"] = rnd(w["ราคาตั้งแต่ยื่น_%"], 1)
+                        st.dataframe(w, use_container_width=True, hide_index=True)
+                    if act["exits"]:
+                        st.warning("⚠️ **ขายออกหมด (ธงระวัง):** " + " · ".join(act["exits"]))
+                    for cav in act["caveats"]:
+                        st.caption("• " + cav)
+
+                # ---- บทวิเคราะห์เชิงคุณภาพเต็ม (เลนส์สไตล์) + AI (ซ่อนถ้าไม่มี key) ----
                 from config import ANTHROPIC_API_KEY
-                if ANTHROPIC_API_KEY:
-                    tab_q, tab_ai = st.tabs(["📋 เชิงคุณภาพ (สูตรฟรี)", "🤖 วิเคราะห์เชิงลึกด้วย AI"])
-                    with tab_q:
-                        st.markdown(qualitative_narrative(key, m, INVESTORS[key]["display"]))
-                    with tab_ai:
+                with st.expander("📋 บทวิเคราะห์เชิงคุณภาพเต็ม (ไอเดีย/หลักคิดของเจ้าของพอร์ต)"):
+                    st.markdown(qualitative_narrative(key, m, INVESTORS[key]["display"]))
+                    if ANTHROPIC_API_KEY:
+                        st.divider()
                         st.caption("วิเคราะห์เชิงลึกด้วย Claude — มีค่าใช้จ่ายต่อครั้ง")
                         if st.button("🤖 วิเคราะห์เชิงลึกด้วย Claude", key="ai_btn"):
                             with st.spinner("Claude กำลังวิเคราะห์..."):
@@ -381,9 +408,6 @@ elif page == "🔁 การเปลี่ยนแปลง":
                             else:
                                 st.markdown(txt)
                                 st.caption("⚠️ สร้างโดย AI — เป็นการตีความ ไม่ใช่คำแนะนำลงทุน")
-                else:
-                    # ไม่มี key = ใช้บทวิเคราะห์สูตรฟรีอย่างเดียว (ปุ่ม AI ซ่อนไว้)
-                    st.markdown(qualitative_narrative(key, m, INVESTORS[key]["display"]))
 
 
 # ---------------------------------------------------------------- Consensus

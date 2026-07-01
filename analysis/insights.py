@@ -167,6 +167,134 @@ def qualitative_narrative(investor, m, display_name):
     return "\n".join(parts)
 
 
+def _consensus_map():
+    """{key(upper): (n_investors, investors_str)} จากกองที่ยัง active — ใช้ยืนยันสัญญาณ"""
+    try:
+        from analysis.consensus import build_consensus
+        con = build_consensus(min_investors=1)
+    except Exception:
+        return {}
+    m = {}
+    for _, r in con.iterrows():
+        for k in [r.get("ticker"), r.get("cusip"), r.get("issuer")]:
+            if pd.notna(k) and k:
+                m[str(k).upper()] = (int(r["n_investors"]), r.get("investors", ""))
+    return m
+
+
+def _prices_since(tickers, since_date):
+    """คืน {ticker: %เปลี่ยนแปลงตั้งแต่ since_date ถึงล่าสุด} (best effort)"""
+    out = {}
+    tickers = [t for t in set(tickers) if t and isinstance(t, str)]
+    if not tickers or not since_date:
+        return out
+    try:
+        import yfinance as yf
+        px = yf.download(tickers, start=since_date, interval="1d",
+                         progress=False, auto_adjust=True)["Close"]
+        if hasattr(px, "columns"):
+            for t in px.columns:
+                s = px[t].dropna()
+                if len(s) >= 2:
+                    out[t] = 100.0 * (s.iloc[-1] / s.iloc[0] - 1)
+        else:  # ticker เดียว -> Series
+            s = px.dropna()
+            if len(s) >= 2:
+                out[tickers[0]] = 100.0 * (s.iloc[-1] / s.iloc[0] - 1)
+    except Exception as e:
+        print("prices_since ข้าม:", e)
+    return out
+
+
+def actionable_insights(investor, ch, m, display_name, top_watch=8, with_prices=True):
+    """
+    สรุปเชิง actionable: หุ้นน่าจับตา (จัดอันดับ signal) + ยืนยันด้วย consensus
+    + ราคาวิ่งตั้งแต่ยื่น + ธงเตือน + bullet สรุป
+    คืน dict: {watch: DataFrame, exits: [..], bullets: [str], caveats: [str]}
+    """
+    if ch.empty or "change" not in ch or not m:
+        return {}
+    lens = STYLE_LENS.get(investor, DEFAULT_LENS)
+    cmap = _consensus_map()
+    label = m.get("label_col", "ticker")
+
+    def _key(r):
+        for c in ["ticker", "cusip", "issuer"]:
+            v = r.get(c)
+            if pd.notna(v) and v:
+                return str(v).upper()
+        return None
+
+    # ---- สร้างตารางหุ้นน่าจับตา จาก NEW + ADD ----
+    buys = ch[ch["change"].isin(["NEW", "ADD"])].copy()
+    rows = []
+    for _, r in buys.iterrows():
+        key = _key(r)
+        n_inv, inv_list = cmap.get(key, (1, ""))
+        others = max(0, n_inv - (1 if investor in str(inv_list) else 0))
+        val = r.get("value_new", 0) or 0
+        # signal: ขนาด (log) + โบนัส consensus + โบนัสเปิดใหม่
+        import math
+        sig = math.log10(val + 1) + others * 1.5 + (2 if r["change"] == "NEW" else 0)
+        rows.append({
+            "ticker": r.get(label) or r.get("issuer"),
+            "issuer": r.get("issuer"),
+            "ที่ทำ": "🆕 เปิดใหม่" if r["change"] == "NEW" else "➕ เพิ่ม",
+            "มูลค่า": val,
+            "เงินใหญ่อื่นถือ": others,
+            "_ticker_raw": r.get("ticker"),
+            "_sig": sig,
+        })
+    watch = pd.DataFrame(rows).sort_values("_sig", ascending=False).head(top_watch) \
+        if rows else pd.DataFrame()
+
+    # ---- ราคาวิ่งตั้งแต่ยื่น (ตั้งแต่ report date) ----
+    if with_prices and not watch.empty:
+        moves = _prices_since(watch["_ticker_raw"].dropna().tolist(), m.get("period_new"))
+        watch["ราคาตั้งแต่ยื่น_%"] = watch["_ticker_raw"].map(
+            lambda t: moves.get(str(t)) if pd.notna(t) else None)
+    else:
+        watch["ราคาตั้งแต่ยื่น_%"] = None
+
+    # ---- ธงเตือน: ขายออกหมด ----
+    exits = []
+    ex = ch[ch["change"] == "EXIT"]
+    if not ex.empty and "shares_old" in ex:
+        ex = ex.sort_values("shares_old", ascending=False)
+        exits = [str(r.get(label) or r.get("issuer")) for _, r in ex.head(6).iterrows()]
+
+    # ---- bullet สรุป actionable ----
+    bullets = []
+    if not watch.empty:
+        top = watch.iloc[0]
+        mv = top["ราคาตั้งแต่ยื่น_%"]
+        mv_txt = (f" · ราคาวิ่งไปแล้ว {mv:+.0f}% ตั้งแต่ยื่น "
+                  f"({'ระวังไล่ราคา' if (mv or 0) > 10 else 'ยังพอตาม'})") if mv is not None else ""
+        conf = f"เงินใหญ่ถือซ้ำ {int(top['เงินใหญ่อื่นถือ'])} เจ้า" if top["เงินใหญ่อื่นถือ"] else "ยังไม่มีเจ้าอื่นถือซ้ำ"
+        bullets.append(f"🎯 **น่าจับตาสุด: {top['ticker']}** ({top['ที่ทำ']}) — {conf}{mv_txt}")
+
+        corroborated = watch[watch["เงินใหญ่อื่นถือ"] >= 1]
+        if not corroborated.empty:
+            names = ", ".join(corroborated["ticker"].head(4).astype(str))
+            bullets.append(f"🤝 **สัญญาณแรง (ถือซ้ำหลายเจ้า):** {names}")
+        chasing = watch[watch["ราคาตั้งแต่ยื่น_%"].fillna(0) > 15]
+        if not chasing.empty:
+            names = ", ".join(chasing["ticker"].head(4).astype(str))
+            bullets.append(f"⚠️ **ราคาวิ่งไปเยอะแล้ว (ระวังไล่):** {names}")
+    if exits:
+        bullets.append(f"🔴 **เจ้าของพอร์ตขายออกหมด:** {', '.join(exits[:4])} — {lens['read_sell']}")
+    bullets.append(f"⚖️ **ท่าทีรวม:** {m['net_stance']} · "
+                   f"กระจุก Top10 {m.get('concentration_top10_pct',0):.0f}%")
+
+    caveats = [
+        "13F ดีเลย์ ~45 วัน — พอร์ตนี้คือ ณ สิ้นไตรมาสที่แล้ว ราคาปัจจุบันอาจต่างไปมาก",
+        "การถือซ้ำหลายเจ้า = สัญญาณแข็งขึ้น แต่ไม่การันตี · เพื่อการศึกษา ไม่ใช่คำแนะนำซื้อขาย",
+    ]
+    if not watch.empty:
+        watch = watch.drop(columns=["_sig", "_ticker_raw", "issuer"], errors="ignore")
+    return {"watch": watch, "exits": exits, "bullets": bullets, "caveats": caveats}
+
+
 def build_ai_prompt(investor, display_name, m, ch):
     lens = STYLE_LENS.get(investor, DEFAULT_LENS)
     top_new = "; ".join(f"{n}" for n, _ in m.get("top_new", [])[:5]) or "-"
