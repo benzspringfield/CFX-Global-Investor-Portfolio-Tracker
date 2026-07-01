@@ -73,6 +73,22 @@ def rnd(series, n=2):
     return pd.to_numeric(series, errors="coerce").round(n)
 
 
+ARCHIVE_AGE_DAYS = 365   # พอร์ตที่ข้อมูลล่าสุดเก่ากว่านี้ = เก็บเข้าคลัง (ซ่อนจากทุกหน้าหลัก ไว้ศึกษา)
+
+
+def _latest_age_days(inv):
+    ps = get_periods(inv)
+    if not ps:
+        return None
+    return (pd.Timestamp.today().normalize() - pd.Timestamp(ps[0])).days
+
+
+def is_archived(inv):
+    """True ถ้าข้อมูลล่าสุดเก่ากว่า 1 ปี (เช่นกองที่เลิกยื่น 13F เช่น Melvin/Greenlight)"""
+    age = _latest_age_days(inv)
+    return age is not None and age > ARCHIVE_AGE_DAYS
+
+
 # ---------------------------------------------------------------- sidebar
 st.sidebar.title("📊 Portfolios Tracker")
 st.sidebar.caption("ถอดรื้อพอร์ตนักลงทุนระดับโลก")
@@ -90,8 +106,13 @@ if not DB_PATH.exists() or DB_PATH.stat().st_size < 5000:
 if page == "🏠 ภาพรวม":
     st.title("ภาพรวมนักลงทุนที่ติดตาม")
     st.caption("ข้อมูลฟรีจาก SEC 13F · arkfunds.io · House Clerk — เป็นเครื่องมือศึกษา ไม่ใช่คำแนะนำลงทุน")
-    cols = st.columns(len(INVESTORS))
-    for col, (key, cfg) in zip(cols, INVESTORS.items()):
+
+    # แยกกองที่ยัง active (ข้อมูล <=1 ปี) กับที่เก็บเข้าคลัง (>1 ปี เช่นเลิกยื่น 13F)
+    visible = [(k, c) for k, c in INVESTORS.items() if not is_archived(k)]
+    archived = [(k, c) for k, c in INVESTORS.items() if is_archived(k)]
+
+    cols = st.columns(len(visible))
+    for col, (key, cfg) in zip(cols, visible):
         with col:
             periods = get_periods(key)
             st.markdown(f"**{cfg['display'].split('(')[0]}**")
@@ -107,6 +128,25 @@ if page == "🏠 ภาพรวม":
                 st.caption("— ยังไม่มีข้อมูล —")
             st.caption(f"📌 {cfg['notes']}")
 
+    # ไอคอนกดดูพอร์ตที่เก็บเข้าคลัง (ซ่อนจากทุกหน้าหลัก ไว้ศึกษาเท่านั้น)
+    if archived:
+        with st.popover(f"🗄️ คลังพอร์ตที่ซ่อนไว้ ({len(archived)})", use_container_width=False):
+            st.markdown("#### 🗄️ พอร์ตที่เก็บเข้าคลัง (ข้อมูลเก่ากว่า 1 ปี — ไว้ศึกษาเท่านั้น)")
+            st.caption("กองเหล่านี้หยุดอัปเดต (เช่นเลิกยื่น 13F/ปิดกอง) จึงซ่อนจากทุกหน้าหลัก "
+                       "และ**ไม่ถูกนำมาคำนวณ Consensus/Model/พอร์ตแนะนำ** — เก็บไว้เพื่อเรียนรู้บทเรียนเท่านั้น")
+            for key, cfg in archived:
+                ps = get_periods(key)
+                age = _latest_age_days(key)
+                st.divider()
+                st.markdown(f"**{cfg['display']}**")
+                st.caption(cfg["style"])
+                if ps:
+                    df = get_holdings(key, ps[0])
+                    yrs = age / 365.25
+                    st.write(f"📅 ข้อมูลล่าสุด **{ps[0]}** (เก่า ~{yrs:.1f} ปี) · "
+                             f"มูลค่าตอนนั้น {fmt_usd(df['value_usd'].sum())} · {len(df)} ตำแหน่ง")
+                st.caption(f"📌 {cfg['notes']}")
+
     st.divider()
     st.subheader("ความเสี่ยง/ข้อจำกัดของข้อมูล")
     st.markdown("""
@@ -120,7 +160,7 @@ if page == "🏠 ภาพรวม":
 # ---------------------------------------------------------------- รายนักลงทุน
 elif page == "👤 รายนักลงทุน":
     st.title("พอร์ตรายนักลงทุน")
-    holders = [k for k in INVESTORS if get_periods(k)]
+    holders = [k for k in INVESTORS if get_periods(k) and not is_archived(k)]
     if not holders:
         st.warning("ยังไม่มีข้อมูล — รัน `python update_data.py`")
     else:
@@ -151,7 +191,8 @@ elif page == "👤 รายนักลงทุน":
 # ---------------------------------------------------------------- การเปลี่ยนแปลง
 elif page == "🔁 การเปลี่ยนแปลง":
     st.title("การเปลี่ยนแปลงพอร์ต (งวดล่าสุด vs งวดก่อน)")
-    holders = [k for k in HOLDINGS_SOURCES if len(get_periods(k)) >= 1]
+    holders = [k for k in HOLDINGS_SOURCES
+               if len(get_periods(k)) >= 1 and not is_archived(k)]
     if not holders:
         st.warning("ยังไม่มีข้อมูล")
     else:
