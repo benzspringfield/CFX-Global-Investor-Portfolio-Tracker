@@ -4,5 +4,6 @@ plotly>=5.20
 yfinance>=0.2.40
 requests>=2.31
 lxml>=5.0
-kaleido>=0.2
-anthropic>=0.40
+# หมายเหตุ: anthropic (ปุ่ม AI) และ kaleido (ดาวน์โหลด PNG) เป็น optional
+# เรียกแบบ lazy + มี try/except อยู่แล้ว — ไม่ใส่ใน requirements เพื่อกัน dependency ชนกันบน cloud
+# ถ้าจะเปิดใช้: ติดตั้งในเครื่อง (pip install anthropic kaleido) หรือเพิ่มกลับมาแบบ pin เวอร์ชัน
