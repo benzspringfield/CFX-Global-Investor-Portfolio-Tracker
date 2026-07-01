@@ -4,4 +4,5 @@ plotly>=5.20
 yfinance>=0.2.40
 requests>=2.31
 lxml>=5.0
+kaleido>=0.2
 anthropic>=0.40

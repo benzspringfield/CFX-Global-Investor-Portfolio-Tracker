@@ -6,12 +6,54 @@
 - value: filing ตั้งแต่ 2023-01-03 รายงานเป็น "ดอลลาร์เต็ม", ก่อนหน้านั้นเป็น "พันดอลลาร์"
 """
 import re
+import urllib.parse
 from lxml import etree
 
 from trackers.common import sec_get, map_cusips_to_tickers
 from store import upsert_holdings, log_fetch
 
 SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik10}.json"
+
+
+def search_13f_managers(name, limit=5, with_last_date=True):
+    """
+    ค้นหาผู้จัดการที่ยื่น 13F จากชื่อ (ผ่าน EDGAR company search)
+    คืน [{cik, name, last_report}] — ใช้ทำ tool 'ค้นหา/เพิ่มพอร์ตใหม่'
+    """
+    url = ("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company="
+           + urllib.parse.quote(name) + "&type=13F-HR&dateb=&owner=include"
+           "&count=" + str(limit) + "&output=atom")
+    try:
+        d = sec_get(url)
+    except Exception as e:
+        return []
+    ciks = re.findall(r"CIK=(\d+)", d)
+    names = re.findall(r"<title>(.*?)</title>", d)
+    # names[0] มักเป็นหัว feed -> ตัดทิ้ง
+    company_names = names[1:] if len(names) > 1 else []
+    out, seen = [], set()
+    for i, cik in enumerate(ciks):
+        cik10 = str(int(cik)).zfill(10)
+        if cik10 in seen:
+            continue
+        seen.add(cik10)
+        nm = company_names[i] if i < len(company_names) else ""
+        # ตัดคำอธิบายฟอร์มออกจากชื่อ (ถ้ามี)
+        nm = nm.split("  -")[0].strip()
+        rec = {"cik": cik10, "name": nm, "last_report": None}
+        if with_last_date:
+            try:
+                sub = sec_get(SUBMISSIONS.format(cik10=cik10), as_json=True)
+                rec["name"] = sub.get("name", nm) or nm
+                rec_dates = [rd for f, rd in zip(sub["filings"]["recent"]["form"],
+                             sub["filings"]["recent"]["reportDate"]) if f.startswith("13F")]
+                rec["last_report"] = max(rec_dates) if rec_dates else None
+            except Exception:
+                pass
+        out.append(rec)
+        if len(out) >= limit:
+            break
+    return out
 ARCHIVE_DIR = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}"
 
 # เกณฑ์เปลี่ยนหน่วย value ของ 13F

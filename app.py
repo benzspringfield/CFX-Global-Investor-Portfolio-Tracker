@@ -2,6 +2,7 @@
 Portfolios Tracker — Dashboard ติดตามพอร์ตนักลงทุนระดับโลก
 รัน:  streamlit run app.py
 """
+import re
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -14,6 +15,7 @@ from analysis.model import build_model, suggest_portfolio
 from analysis.backtest import run_backtest, compare_portfolios
 from analysis.adaptive import run_adaptive, compare_adaptive
 from analysis.insights import quant_metrics, qualitative_narrative, ai_analysis
+from trackers.edgar_13f import search_13f_managers
 
 st.set_page_config(page_title="Portfolios Tracker", layout="wide", page_icon="📊")
 
@@ -163,6 +165,12 @@ if page == "🏠 ภาพรวม":
     query = fc1.text_input("🔍 ค้นหาพอร์ต (ชื่อนักลงทุน / สไตล์)", "").strip().lower()
     show_hidden = fc2.toggle("แสดงกองที่ซ่อนไว้ (ไม่มีข้อมูล / เก่ากว่า 1 ปี)", value=False)
 
+    # 📌 ปักหมุดพอร์ตที่สนใจ (ขึ้นก่อนเสมอในเซสชันนี้)
+    pin_opts = [k for k in INVESTORS if not is_archived(k) and get_periods(k)]
+    pinned = st.multiselect(
+        "📌 ปักหมุดพอร์ตที่สนใจ (ขึ้นก่อน)", pin_opts, default=[],
+        format_func=lambda k: INVESTORS[k]["display"].split("(")[0].strip())
+
     def _is_hidden(k):
         return is_archived(k) or not get_periods(k)   # เก่ากว่า 1 ปี หรือ ไม่มี holdings
 
@@ -201,6 +209,9 @@ if page == "🏠 ภาพรวม":
 
     active = [(k, c) for k, c in INVESTORS.items() if not _is_hidden(k)]
     hidden = [(k, c) for k, c in INVESTORS.items() if _is_hidden(k)]
+    # เรียงพอร์ตที่ปักหมุดขึ้นก่อน
+    if pinned:
+        active.sort(key=lambda kc: (kc[0] not in pinned))
 
     if query:
         # โหมดค้นหา — ค้นทั้งหมด (รวมกองที่ซ่อน) ให้เจอสิ่งที่สนใจ
@@ -232,6 +243,35 @@ if page == "🏠 ภาพรวม":
                         else:
                             st.write(f"แหล่ง: {cfg['source']} (ไม่มี holdings)")
                         st.caption(f"📌 {cfg['notes']}")
+
+    # ➕ ค้นหา/เพิ่มพอร์ตใหม่จาก SEC (ฟรี)
+    with st.expander("➕ ค้นหาพอร์ตใหม่จาก SEC (เพิ่มนักลงทุนที่สนใจ)"):
+        st.caption("ค้นชื่อกองทุน/ผู้จัดการที่ยื่น 13F ในระบบ SEC — เจอแล้วก็อปโค้ดไปเพิ่มใน `config.py`")
+        qname = st.text_input("ชื่อกอง/ผู้จัดการ (อังกฤษ)",
+                              placeholder="เช่น Pershing Square, Tiger Global, Bridgewater")
+        if qname:
+            with st.spinner("ค้นหาใน SEC..."):
+                results = search_13f_managers(qname, limit=6)
+            if not results:
+                st.info("ไม่พบ — ลองพิมพ์ชื่อให้ตรงขึ้น (เป็นภาษาอังกฤษ)")
+            for r in results:
+                fresh = (r["last_report"] or "") >= "2025-01-01"
+                st.markdown(f"**{r['name']}** · CIK `{r['cik']}` · "
+                            f"13F ล่าสุด {r['last_report'] or '—'} "
+                            f"{'🟢 ยังยื่นอยู่' if fresh else '🔴 อาจเลิกยื่น'}")
+                slug = re.sub(r'[^a-z0-9]+', '_', r['name'].lower()).strip('_')[:20] or "new_fund"
+                st.code(f'''    "{slug}": {{
+        "display": "{r['name']}",
+        "source": "edgar_13f",
+        "cik": "{r['cik']}",
+        "style": "—",
+        "notes": "เพิ่มจาก SEC finder",
+        "skill": None,
+    }},''', language="python")
+            if results:
+                st.caption("วิธีเพิ่ม: ก็อปบล็อกข้างบนไปวางใน `INVESTORS` ใน config.py → "
+                           "รัน `python fetch_history.py` (หรือ `update_data.py`) → push → แอปอัปเดตเอง "
+                           "(ดู [DEVELOP.md](DEVELOP.md))")
 
     st.divider()
     st.subheader("ความเสี่ยง/ข้อจำกัดของข้อมูล")
@@ -324,15 +364,13 @@ elif page == "🔁 การเปลี่ยนแปลง":
                 q4.metric("กระจุก Top10",
                           f"{m['concentration_top10_pct']:.0f}%" if m.get("concentration_top10_pct") else "-")
 
-                tab_q, tab_ai = st.tabs(["📋 เชิงคุณภาพ (สูตรฟรี)", "🤖 วิเคราะห์เชิงลึกด้วย AI"])
-                with tab_q:
-                    st.markdown(qualitative_narrative(key, m, INVESTORS[key]["display"]))
-                with tab_ai:
-                    from config import ANTHROPIC_API_KEY
-                    if not ANTHROPIC_API_KEY:
-                        st.info("ยังไม่ได้ตั้ง `ANTHROPIC_API_KEY` ใน Secrets → ปุ่ม AI จะใช้ได้เมื่อใส่ key "
-                                "(มีค่าใช้จ่ายต่อครั้งที่กด) · ตอนนี้ใช้บทวิเคราะห์สูตรฟรีในแท็บซ้ายได้เลย")
-                    else:
+                # ฟีเจอร์ AI (เสียเงิน) ถูกปิด/ซ่อนไว้ — จะโผล่อัตโนมัติเมื่อตั้ง ANTHROPIC_API_KEY ใน Secrets
+                from config import ANTHROPIC_API_KEY
+                if ANTHROPIC_API_KEY:
+                    tab_q, tab_ai = st.tabs(["📋 เชิงคุณภาพ (สูตรฟรี)", "🤖 วิเคราะห์เชิงลึกด้วย AI"])
+                    with tab_q:
+                        st.markdown(qualitative_narrative(key, m, INVESTORS[key]["display"]))
+                    with tab_ai:
                         st.caption("วิเคราะห์เชิงลึกด้วย Claude — มีค่าใช้จ่ายต่อครั้ง")
                         if st.button("🤖 วิเคราะห์เชิงลึกด้วย Claude", key="ai_btn"):
                             with st.spinner("Claude กำลังวิเคราะห์..."):
@@ -343,6 +381,9 @@ elif page == "🔁 การเปลี่ยนแปลง":
                             else:
                                 st.markdown(txt)
                                 st.caption("⚠️ สร้างโดย AI — เป็นการตีความ ไม่ใช่คำแนะนำลงทุน")
+                else:
+                    # ไม่มี key = ใช้บทวิเคราะห์สูตรฟรีอย่างเดียว (ปุ่ม AI ซ่อนไว้)
+                    st.markdown(qualitative_narrative(key, m, INVESTORS[key]["display"]))
 
 
 # ---------------------------------------------------------------- Consensus
@@ -426,7 +467,16 @@ elif page == "🧠 Model & พอร์ตแนะนำ":
 
         # การ์ดนำเสนอสไตล์ infographic
         port_value = float(model.head(n_port)["total_value"].sum())
-        st.plotly_chart(render_infographic(port, port_value), use_container_width=True)
+        info_fig = render_infographic(port, port_value)
+        st.plotly_chart(info_fig, use_container_width=True)
+        # ปุ่มดาวน์โหลดการ์ดเป็นรูป PNG (ฟรี ผ่าน kaleido)
+        try:
+            png = info_fig.to_image(format="png", width=1000, height=1000, scale=2)
+            st.download_button("⬇️ ดาวน์โหลดการ์ดเป็นรูป PNG", png,
+                               "charles_xavier_portfolio.png", "image/png")
+        except Exception:
+            st.caption("💡 ดาวน์โหลด PNG ต้องมีแพ็กเกจ kaleido (มีใน requirements แล้ว "
+                       "— บน cloud ใช้ได้ ในเครื่องถ้ายังไม่ลง รัน `pip install kaleido`)")
 
         cc1, cc2 = st.columns([2, 1])
         with cc1:
