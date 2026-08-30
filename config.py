@@ -87,6 +87,31 @@ INVESTORS = {
         "notes": "เปิด holdings รายวัน — ข้อมูลละเอียดที่สุดในกลุ่มนี้",
         "skill": None,
     },
+    # --- เพิ่ม 30 ส.ค. 2026 (คัดกรองด้วย scratchpad/screen_candidates.py: จำลองพอร์ต 13F top-15 vs SPY, พ.ค.2025→ส.ค.2026) ---
+    "baupost": {
+        "display": "Seth Klarman (Baupost Group)",
+        "source": "edgar_13f",
+        "cik": "0001061768",
+        "style": "Value / contrarian — concentrated",
+        "notes": "พอร์ต 13F จำลอง +51% vs SPY +32% (alpha CAGR +13, MDD ต่ำ) สไตล์ value ถ่วงดุลกลุ่ม AI/growth ในแอป",
+        "skill": None,
+    },
+    "coatue": {
+        "display": "Philippe Laffont (Coatue Management)",
+        "source": "edgar_13f",
+        "cik": "0001135730",
+        "style": "Tech / AI crossover — long/short",
+        "notes": "พอร์ต 13F จำลอง +38% vs SPY +32%; สื่อรายงาน 2026 YTD +14.3% ถึง ก.ค. (Bloomberg) ทนตลาด AI ร่วงได้ดีกว่ากลุ่ม",
+        "skill": None,
+    },
+    "viking": {
+        "display": "Andreas Halvorsen (Viking Global Investors)",
+        "source": "edgar_13f",
+        "cik": "0001103804",
+        "style": "Fundamental long/short — hedge หนัก",
+        "notes": "พอร์ต 13F จำลอง +38% vs SPY +32% MDD ต่ำสุดในกลุ่ม; ผลจริงที่รายงานต่ำ (+2.5% YTD ก.ค. 2026) เพราะ short — ใช้เฉพาะสัญญาณฝั่ง long",
+        "skill": None,
+    },
     # --- กองที่ "เลิกยื่น 13F" แล้ว (ใส่เพื่อแก้ survivorship bias ใน backtest) ---
     "melvin": {
         "display": "Melvin Capital (Gabe Plotkin) [defunct]",
